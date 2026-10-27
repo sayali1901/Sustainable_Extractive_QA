@@ -1,9 +1,4 @@
-"""
-Candidate local model registry for Variant 3.
-
-This is a research/runtime registry, not a downloader. The runtime can use
-matching Ollama model names when they are already installed locally.
-"""
+"""Local Ollama model options."""
 
 
 CANDIDATE_MODELS = [
@@ -15,7 +10,7 @@ CANDIDATE_MODELS = [
         "licence": "Apache-2.0",
         "resource_tier": "tiny",
         "expected_memory_gb_q4": 0.7,
-        "why": "Best first choice for no-lag CPU RAG; permissive licence and very small memory footprint.",
+        "why": "Smallest option and suitable for low-memory CPUs.",
     },
     {
         "id": "qwen3-1.7b",
@@ -25,7 +20,7 @@ CANDIDATE_MODELS = [
         "licence": "Apache-2.0",
         "resource_tier": "small",
         "expected_memory_gb_q4": 1.5,
-        "why": "Better answer quality than 0.6B while still practical on commodity CPU.",
+        "why": "Stronger than 0.6B while still practical on a laptop CPU.",
     },
     {
         "id": "qwen2.5-1.5b-instruct",
@@ -35,7 +30,7 @@ CANDIDATE_MODELS = [
         "licence": "Apache-2.0",
         "resource_tier": "small",
         "expected_memory_gb_q4": 1.4,
-        "why": "Stable instruct model; useful fallback when Qwen3 is unavailable.",
+        "why": "Fallback option when Qwen3 is unavailable.",
     },
     {
         "id": "llama3.2-1b-instruct",
@@ -45,7 +40,7 @@ CANDIDATE_MODELS = [
         "licence": "Meta Llama Community License",
         "resource_tier": "small",
         "expected_memory_gb_q4": 1.0,
-        "why": "Good CPU option, but licence is more restrictive than Apache-2.0 alternatives.",
+        "why": "Small CPU model with a more restrictive licence.",
     },
     {
         "id": "llama3.2-3b-instruct",
@@ -55,7 +50,7 @@ CANDIDATE_MODELS = [
         "licence": "Meta Llama Community License",
         "resource_tier": "medium",
         "expected_memory_gb_q4": 2.4,
-        "why": "Higher quality tier when latency target and memory budget allow it.",
+        "why": "Larger option for systems with more memory.",
     },
 ]
 
@@ -70,7 +65,8 @@ MODEL_PREFERENCE = [
 
 
 def preferred_model(installed_names):
-    """Pick the preferred installed Ollama model name."""
+    """Pick the first preferred installed model."""
+    # Follow the fixed preference order.
     installed = set(installed_names)
     for name in MODEL_PREFERENCE:
         if name in installed:
@@ -79,7 +75,8 @@ def preferred_model(installed_names):
 
 
 def model_profile_by_ollama(name):
-    """Return registry metadata for an Ollama model name."""
+    """Find a model profile by Ollama name."""
+    # Keep custom models usable without registry entries.
     for profile in CANDIDATE_MODELS:
         if profile["ollama"] == name:
             return profile

@@ -1,16 +1,4 @@
-"""
-Evaluation on SQuAD v2.0.
-
-Supports paragraph-level and article-level evaluation modes,
-plus ablation studies over scoring weights, refusal thresholds,
-and chunk sizes.
-
-Usage:
-    python -m src.evaluate --data data/dev-v2.0.json
-    python -m src.evaluate --data data/dev-v2.0.json --ablation threshold
-    python -m src.evaluate --data data/dev-v2.0.json --ablation weights
-    python -m src.evaluate --data data/dev-v2.0.json --ablation chunksize
-"""
+"""Evaluate the pipeline on SQuAD v2.0."""
 
 import json
 import time
@@ -24,28 +12,15 @@ from .metrics import exact_match, answer_containment, token_f1
 
 
 def load_squad(path):
+    # SQuAD is stored as UTF-8 JSON.
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
              mode="paragraph", verbose=True):
-    """
-    Run evaluation on SQuAD v2.0 data.
-
-    Args:
-        data: Parsed SQuAD JSON.
-        theta: Refusal threshold.
-        W: Chunk window size.
-        O: Chunk overlap.
-        alpha, beta, gamma: Scoring weights.
-        mode: 'paragraph' (each question uses its paragraph context)
-              or 'article' (each article is one document).
-        verbose: Print progress.
-
-    Returns:
-        Dict of evaluation results.
-    """
+    """Run the selected SQuAD evaluation."""
+    # Track totals before calculating rates.
     total = 0
     answerable_n = 0
     unanswerable_n = 0
@@ -59,7 +34,7 @@ def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
 
     for ai, article in enumerate(data["data"]):
         if mode == "article":
-            # Merge all paragraphs into one document
+            # Search the whole article in article mode.
             full_text = " ".join(p["context"] for p in article["paragraphs"])
             chunks = chunk_document(full_text, W, O)
             if not chunks:
@@ -68,6 +43,7 @@ def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
 
         for para in article["paragraphs"]:
             if mode == "paragraph":
+                # Rebuild the index for each local context.
                 chunks = chunk_document(para["context"], W, O)
                 if not chunks:
                     continue
@@ -88,12 +64,14 @@ def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
 
                 if is_impossible:
                     unanswerable_n += 1
+                    # A refusal is correct for an impossible question.
                     if answer is None:
                         refusal_correct += 1
                 else:
                     answerable_n += 1
                     gold_answers = list(set(a["text"] for a in qa["answers"]))
                     if gold_answers:
+                        # Score against every accepted gold answer.
                         if exact_match(answer, gold_answers):
                             em_correct += 1
                         if answer_containment(answer, gold_answers):
@@ -104,6 +82,7 @@ def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
             print(f"  {ai+1}/{total_articles} articles, {total} questions...",
                   file=sys.stderr)
 
+    # Sorting allows direct percentile lookup.
     latencies.sort()
     results = {
         "total_questions": total,
@@ -123,6 +102,7 @@ def evaluate(data, theta=0.0, W=200, O=40, alpha=0.5, beta=0.3, gamma=0.2,
 
 
 def print_results(results, label=""):
+    # Keep console output easy to scan.
     if label:
         print(f"\n{'=' * 60}")
         print(label)
@@ -139,6 +119,7 @@ def print_results(results, label=""):
 
 
 def main():
+    # Parse evaluation and ablation options.
     parser = argparse.ArgumentParser(description="Evaluate on SQuAD v2.0")
     parser.add_argument("--data", required=True, help="Path to SQuAD v2.0 JSON")
     parser.add_argument("--mode", default="paragraph",
@@ -157,6 +138,7 @@ def main():
     print(f"Loaded {sum(len(p['qas']) for a in data['data'] for p in a['paragraphs'])} questions")
 
     if args.ablation == "threshold":
+        # Hold all settings except the refusal threshold fixed.
         print("\nRefusal Threshold Ablation")
         print("-" * 70)
         print(f"  {'theta':>5s} | {'Containment':>11s} | {'Token F1':>8s} | {'Refusal':>7s}")
@@ -169,6 +151,7 @@ def main():
                   f"{r['avg_token_f1']:8.4f} | {r['refusal_accuracy']:7.4f}")
 
     elif args.ablation == "weights":
+        # Compare common scoring-weight choices.
         print("\nScoring Weight Ablation")
         print("-" * 70)
         configs = [
@@ -186,6 +169,7 @@ def main():
                   f"F1={r['avg_token_f1']:.4f}")
 
     elif args.ablation == "chunksize":
+        # Keep overlap at one fifth of the window.
         print("\nChunk Size Ablation")
         print("-" * 70)
         for W in [50, 100, 150, 200, 300, 400]:

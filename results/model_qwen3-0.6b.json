@@ -1,0 +1,23 @@
+{
+  "items": 100,
+  "prompt_id": "rag_cited_answer",
+  "model": "qwen3:0.6b",
+  "use_generator": true,
+  "latency_target_ms": 10000,
+  "max_context_tokens": 900,
+  "top_k": 5,
+  "window_size": 400,
+  "overlap": 80,
+  "exact_match": 0.0,
+  "answer_containment": 0.62,
+  "token_f1": 0.19976575175524758,
+  "mean_latency_ms": 1301.639507,
+  "p95_latency_ms": 2871.0082,
+  "mean_prompt_tokens": 186.06,
+  "mean_context_tokens": 126.93,
+  "mean_output_tokens": 17.01,
+  "mean_retrieved_chunks": 1,
+  "generated": 100,
+  "fallbacks": 0,
+  "total_elapsed_ms": 130207.27890002308
+}

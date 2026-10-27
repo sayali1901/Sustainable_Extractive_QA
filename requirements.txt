@@ -1,3 +1,2 @@
-# Zero external dependencies.
-# This project runs entirely on the Python standard library.
-# Python >= 3.7 required.
+# The local pipeline uses only the Python standard library.
+# Install `openai` separately only to recreate the closed-model baseline.

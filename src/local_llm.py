@@ -1,11 +1,4 @@
-"""
-Optional local LLM backend for offline generation.
-
-The project remains runnable without a model. When Ollama is installed and
-serving a local model, this wrapper uses its local API with deterministic
-options. Otherwise callers receive an explicit unavailable result and can
-fall back to retrieval-only answers.
-"""
+"""Call a local Ollama model."""
 
 import json
 import os
@@ -36,15 +29,17 @@ class GenerationResult:
 
 
 class LocalLLM:
-    """Small wrapper around an already-installed local Ollama runtime."""
+    """Small wrapper around Ollama's local API."""
 
     def __init__(self, model=None, endpoint=None, seed=DEFAULT_SEED):
+        # Allow local settings through environment variables.
         self.endpoint = (endpoint or os.environ.get("LOCAL_QA_OLLAMA_ENDPOINT")
                          or DEFAULT_ENDPOINT).rstrip("/")
         self.model = model or os.environ.get("LOCAL_QA_MODEL")
         self.seed = seed
 
     def _request_json(self, method, path, payload=None, timeout_s=0.25):
+        # Encode request bodies only when present.
         data = None
         headers = {}
         if payload is not None:
@@ -57,11 +52,13 @@ class LocalLLM:
             headers=headers,
             method=method,
         )
+        # Read the full non-streaming response.
         with urllib.request.urlopen(req, timeout=timeout_s) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def available_models(self, timeout_s=0.25):
-        """Return locally installed Ollama model names, or [] if unavailable."""
+        """List installed models."""
+        # Treat an offline server as no available models.
         try:
             payload = self._request_json("GET", "/api/tags", timeout_s=timeout_s)
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
@@ -70,7 +67,8 @@ class LocalLLM:
                 if item.get("name")]
 
     def status(self):
-        """Return backend status and recommended model metadata."""
+        """Report local model status."""
+        # Prefer an explicit model over automatic selection.
         models = self.available_models()
         selected = self.model or preferred_model(models)
         return {
@@ -84,18 +82,15 @@ class LocalLLM:
 
     def generate(self, prompt, max_new_tokens=160, timeout_s=1.5,
                  temperature=0.0, top_p=1.0, num_ctx=1024):
-        """
-        Generate text with deterministic local settings.
-
-        If no local model is available or the target timeout is exceeded, the
-        result has ok=False and includes an error suitable for fallback logs.
-        """
+        """Generate text or return a fallback error."""
+        # Check the server before sending the prompt.
         t0 = time.perf_counter()
         models = self.available_models(timeout_s=min(timeout_s, 0.25))
         model = self.model or preferred_model(models)
         prompt_tokens = estimate_tokens(prompt)
 
         if not model:
+            # Return structured errors so callers can fall back.
             return GenerationResult(
                 text="",
                 ok=False,
@@ -110,9 +105,11 @@ class LocalLLM:
 
         payload = {
             "model": model,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
+            "think": False,
             "options": {
+                # Disable sampling for stable output.
                 "seed": self.seed,
                 "temperature": temperature,
                 "top_p": top_p,
@@ -123,9 +120,10 @@ class LocalLLM:
 
         try:
             raw = self._request_json(
-                "POST", "/api/generate", payload=payload, timeout_s=timeout_s
+                "POST", "/api/chat", payload=payload, timeout_s=timeout_s
             )
         except TimeoutError:
+            # Keep timeouts distinct in audit logs.
             return GenerationResult(
                 text="",
                 ok=False,
@@ -150,7 +148,8 @@ class LocalLLM:
                 raw={},
             )
 
-        text = raw.get("response", "").strip()
+        # Ollama returns generated text inside message.content.
+        text = raw.get("message", {}).get("content", "").strip()
         return GenerationResult(
             text=text,
             ok=bool(text),

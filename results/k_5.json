@@ -1,0 +1,16 @@
+{
+  "items": 100,
+  "prompt_id": "rag_cited_answer",
+  "model": "qwen3:1.7b",
+  "use_generator": true,
+  "latency_target_ms": 10000,
+  "max_context_tokens": 4000,
+  "top_k": 5,
+  "window_size": 100,
+  "overlap": 20,
+  "answer_containment": 0.94,
+  "mean_latency_ms": 4131.388223,
+  "p95_latency_ms": 7444.0541,
+  "mean_context_tokens": 147.65,
+  "mean_retrieved_chunks": 1.84
+}

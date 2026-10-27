@@ -1,151 +1,171 @@
-# Sustainable Extractive QA for Resource-Constrained Environments
+# Sustainable Extractive QA
 
-A fully offline, zero-dependency extractive question answering system implemented in pure Python. Designed for deployment on standard laptops without GPU or internet access.
+This project answers questions from local documents without sending their contents to an external service. It combines TF-IDF retrieval, extractive question answering, and an optional Ollama model. If no local model is available, it returns the best sentence from the source text.
 
-**Paper:** *Sustainable Extractive Question Answering for Resource-Constrained Personalized Document Assistants*  
-**Venue:** LLM4Good Workshop, ACM UMAP 2026, Gothenburg, Sweden  
-**Author:** Sayali Nitin Doifode, King's College London
+The core pipeline uses only the Python standard library and runs on a CPU.
 
-## Key Results (SQuAD v2.0 Dev Set — 11,873 Questions)
+## Results
 
-| Metric | Value |
-|---|---|
-| Answer Containment | 69.0% |
-| Token F1 | 0.171 |
-| Mean Latency | 0.097 ms |
-| p95 Latency | 0.183 ms |
-| Peak Memory | <10 MB |
-| Est. Energy/Query | ~0.0015 mJ |
-| External Dependencies | **Zero** |
+The final configuration was evaluated on all 5,928 answerable questions in the SQuAD v2.0 development set.
 
-## Overview
+| Setting | Answer containment |
+|---|---:|
+| Extractive fallback, 100-question test | 0.73 |
+| Local RAG, 100-question test | 0.87 |
+| Local RAG, full answerable set | 0.811 |
+| GPT-4o-mini baseline, 100-question test | 0.98 |
 
-The system combines a pure-Python TF-IDF retriever with a multi-factor extractive answer selector. It returns document-grounded answers with sub-millisecond latency and under 10 MB of memory — approximately four orders of magnitude less energy per query than quantized small language models.
+The 100-question runs were used to choose the model, prompt, retrieval count, and latency budget. The full-set run was then used as the final evaluation. Detailed results and raw outputs are in [`results/`](results/).
 
-```
-Documents → C1: Chunker → C2: TF-IDF Retriever → C3: Extractive QA → Answer + Citations
-                                                     ↑
-                                              C4: Audit Logger (logs every stage)
-```
+## How it works
 
-## Quick Start
+1. Documents are split into overlapping chunks.
+2. A TF-IDF index ranks chunks against the question.
+3. The extractive path scores sentences using query coverage, density, length, and retrieval relevance.
+4. If Ollama is available, the retrieved context is passed to a local model with citations.
+5. If generation is unavailable or times out, the extractive answer is returned.
 
-No installation required. The entire system runs on the Python standard library.
+Each request records its latency, confidence, citations, model, prompt version, and fallback reason.
 
-```bash
-# Ask a question about a document
-python -m src.pipeline --document path/to/document.txt --query "What is the main finding?"
+## Requirements
 
-# Run evaluation on SQuAD v2.0
-python -m src.evaluate --data data/dev-v2.0.json --mode paragraph
+- Python 3.9 or newer
+- Optional: [Ollama](https://ollama.com/) and a local model such as `qwen3:1.7b`
+- Optional: the `openai` Python package for recreating the closed-model baseline
 
-# Run with custom parameters
-python -m src.evaluate --data data/dev-v2.0.json --theta 0.30 --alpha 0.5 --beta 0.3 --gamma 0.2
-```
+No Python packages are required for the extractive pipeline, evaluation tools, or web interface.
 
-## Variant 3: Local RAG + UI
+## Setup
 
-This repository also includes a lightweight local RAG component for CPU-only
-on-device QA and short summaries. It keeps the original extractive pipeline as
-the deterministic fallback and can use an already-installed local Ollama model
-such as Qwen or Llama when available.
+Download the SQuAD v2.0 development set:
 
 ```bash
-# Launch the local UI
+curl -L https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json \
+  -o data/dev-v2.0.json
+```
+
+The dataset is not tracked because it is about 10 MB. See [`data/README.md`](data/README.md) for its source and citation.
+
+## Use the extractive pipeline
+
+Ask one question:
+
+```bash
+python -m src.pipeline \
+  --document path/to/document.txt \
+  --query "What is the main finding?"
+```
+
+Start an interactive session:
+
+```bash
+python -m src.pipeline --document path/to/document.txt --interactive
+```
+
+An audit log is written to `audit_log.jsonl` unless another path is supplied with `--audit-log`.
+
+## Use the local web interface
+
+Start the interface from the project directory:
+
+```bash
 python -m src.ui --host 127.0.0.1 --port 8000
-
-# Benchmark prompt/model settings on SQuAD v2.0
-python -m src.benchmark_variant3 --data data/dev-v2.0.json --limit 100
-
-# Try local generation if an Ollama model is already installed
-python -m src.benchmark_variant3 --data data/dev-v2.0.json --limit 100 --use-generator --model qwen3:0.6b
 ```
 
-Variant 3 additions:
-- Prompt pack for cited answers, strict RAG, short summaries, self-correction, and graph prompts.
-- Optional local generator wrapper using Ollama with fixed seed and deterministic settings.
-- Latency-aware fallback to retrieval-only answers when generation is unavailable or exceeds the target.
-- Multi-document loading and lightweight graph hints.
-- Web UI with no external frontend dependencies.
-- Benchmark harness logging accuracy, p95 latency, token counts, model/prompt metadata, and fallback counts.
+Open `http://127.0.0.1:8000` in a browser. The interface searches the local SQuAD file and uses Ollama when a model is running. Otherwise, it uses the extractive fallback.
 
-## Project Structure
+The question box starts empty. Five example buttons are integrated directly below it; selecting one copies its complete question into the box, where it can be edited before choosing **Ask** or **Summarize evidence**. This keeps the examples available without preselecting or automatically submitting a question.
 
+### Sample questions
+
+1. What does a U.S. census report state that even after other factors there still exists this between earnings of men and women?
+2. Who is the author of the book, "Knowledge and Decisions"?
+3. What is Southern California often abbreviated as?
+4. What is the atomic number of oxygen?
+5. When did the 1973 oil crisis begin?
+
+The experiment panel exposes the settings used in the evaluation: local model, prompt, retrieved chunks, chunk window, overlap, latency budget, context budget, generation, and self-correction. Indexes are cached by chunk configuration so repeated comparisons reuse the same retrieval work.
+
+To select a model or Ollama endpoint:
+
+```bash
+export LOCAL_QA_MODEL="qwen3:1.7b"
+export LOCAL_QA_OLLAMA_ENDPOINT="http://127.0.0.1:11434"
 ```
-.
-├── src/
-│   ├── __init__.py
-│   ├── chunker.py          # C1: Document chunker with configurable window/overlap
-│   ├── retriever.py         # C2: Pure-Python TF-IDF retriever
-│   ├── qa_engine.py         # C3: Multi-factor extractive QA with refusal
-│   ├── audit.py             # C4: Structured JSON audit logging
-│   ├── pipeline.py          # Combined pipeline + CLI interface
-│   ├── metrics.py           # Evaluation metrics (EM, Containment, F1)
-│   ├── evaluate.py          # Full evaluation on SQuAD v2.0
-│   ├── rag_pipeline.py      # Variant 3 local RAG + fallback orchestration
-│   ├── prompts.py           # Versioned prompt pack
-│   ├── local_llm.py         # Optional Ollama wrapper
-│   ├── model_registry.py    # Candidate local model registry
-│   ├── graph.py             # Lightweight document graph hints
-│   ├── benchmark_variant3.py# Prompt/model benchmark harness
-│   └── ui.py                # Minimal local web UI
-├── data/
-│   └── README.md            # Instructions for downloading SQuAD v2.0
-├── results/
-│   └── full_results.md      # Complete evaluation results
-├── paper/
-│   └── paper.tex            # Camera-ready paper source
-├── LICENSE
-├── README.md
-└── requirements.txt         # Empty — zero dependencies
-```
-
-## System Components
-
-### C1: Document Chunker (`src/chunker.py`)
-Fixed-window segmentation with configurable window size W and overlap O. Each chunk receives a deterministic MD5 identifier for reproducibility.
-
-### C2: TF-IDF Retriever (`src/retriever.py`)
-Pure-Python TF-IDF with smoothed IDF and cosine similarity ranking. Returns top-k chunks.
-
-### C3: Extractive QA Engine (`src/qa_engine.py`)
-Multi-factor sentence scoring combining coverage, density, and length. Includes a configurable refusal threshold θ for unanswerable question detection.
-
-### C4: Audit Logger (`src/audit.py`)
-Structured JSON logging of every pipeline run. Fixed seed (s=42) ensures bitwise deterministic reproducibility.
 
 ## Evaluation
 
-Download SQuAD v2.0 dev set:
+Run the extractive evaluation:
+
 ```bash
-wget https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json -O data/dev-v2.0.json
+python -m src.evaluate --data data/dev-v2.0.json --mode paragraph
 ```
 
-Run full evaluation:
-```bash
-python -m src.evaluate --data data/dev-v2.0.json
-```
+Run an ablation study:
 
-Run ablation studies:
 ```bash
-python -m src.evaluate --data data/dev-v2.0.json --ablation weights
 python -m src.evaluate --data data/dev-v2.0.json --ablation threshold
+python -m src.evaluate --data data/dev-v2.0.json --ablation weights
 python -m src.evaluate --data data/dev-v2.0.json --ablation chunksize
 ```
 
-## Citation
+Benchmark the local RAG configuration:
 
-```bibtex
-@inproceedings{doifode2026sustainable,
-  author    = {Doifode, Sayali Nitin},
-  title     = {Sustainable Extractive Question Answering for Resource-Constrained 
-               Personalized Document Assistants},
-  booktitle = {Joint Proceedings of the ACM UMAP Workshops 2026 (LLM4Good)},
-  year      = {2026},
-  address   = {Gothenburg, Sweden}
-}
+```bash
+python -m src.benchmark_variant3 \
+  --data data/dev-v2.0.json \
+  --limit 100 \
+  --answerable-only \
+  --use-generator \
+  --model qwen3:1.7b \
+  --top-k 3 \
+  --window-size 100 \
+  --overlap 20 \
+  --latency-target-ms 5000 \
+  --max-context-tokens 4000
 ```
 
-## License
+## Optional closed-model baseline
 
-MIT License. See [LICENSE](LICENSE) for details.
+The closed-model script is separate from the local runtime. Install its dependency and set your API key only if you need to recreate that comparison:
+
+```bash
+pip install openai
+export OPENAI_API_KEY="your-key"
+python openai_baseline.py \
+  --data data/dev-v2.0.json \
+  --limit 100 \
+  --output results/closed_baseline_openai.csv
+```
+
+Score saved baseline predictions with `--closed-baseline-csv` when running `src.benchmark_variant3`.
+
+## Project layout
+
+```text
+src/
+  chunker.py             document chunking
+  retriever.py           TF-IDF indexing and retrieval
+  qa_engine.py           extractive sentence scoring
+  rag_pipeline.py        local generation and fallback logic
+  local_llm.py           Ollama client
+  prompts.py             prompt templates and context limits
+  graph.py               optional term-to-chunk hints
+  audit.py               JSONL audit records
+  metrics.py             evaluation metrics
+  evaluate.py            extractive SQuAD evaluation
+  benchmark_variant3.py  local RAG benchmark
+  pipeline.py            extractive command-line interface
+  ui.py                  local web interface
+results/                 evaluation tables and raw outputs
+data/                    dataset instructions
+openai_baseline.py       optional closed-model comparison
+```
+
+## Reproducibility
+
+- Retrieval and extractive scoring are deterministic.
+- Local generation uses temperature `0` and seed `42`.
+- Prompt templates have a fixed version string.
+- Raw experiment outputs are stored as UTF-8 JSON in `results/`.
+- Hardware load and local model versions can still affect latency and generated wording.

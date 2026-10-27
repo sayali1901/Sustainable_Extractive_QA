@@ -1,10 +1,4 @@
-"""
-Variant 3 local RAG pipeline.
-
-Adds optional local LLM generation, prompt-pack support, latency-aware
-fallback, multi-document loading, and richer run metadata while preserving
-the original extractive pipeline as the no-lag fallback.
-"""
+"""Local RAG with an extractive fallback."""
 
 import re
 import time
@@ -25,8 +19,12 @@ from .retriever import build_index, retrieve
 
 YEAR_RE = re.compile(r"\b([1-9][0-9]{2,3})\b")
 
+# Let CPU generation finish by default.
+UNLIMITED_BUDGET_MS = 60000
+
 
 def _sentence_case(text):
+    # Capitalize without changing the remaining text.
     text = text.strip()
     if not text:
         return text
@@ -34,12 +32,8 @@ def _sentence_case(text):
 
 
 def compress_extractive_answer(query, answer):
-    """
-    Make deterministic fallback answers shorter for simple date questions.
-
-    This is intentionally narrow. It does not invent a date; it only rewrites
-    when the extracted evidence already contains an explicit year.
-    """
+    """Shorten fallback answers to simple date questions."""
+    # Only shorten answers that contain a year.
     if not answer or answer == "Insufficient evidence.":
         return answer
 
@@ -49,6 +43,7 @@ def compress_extractive_answer(query, answer):
 
     year = year_match.group(1)
     query_clean = query.strip().rstrip("?")
+    # Preserve the question subject in the short answer.
     begin_match = re.match(r"(?i)^when\s+did\s+(.+?)\s+begin$", query_clean)
     if begin_match:
         subject = _sentence_case(begin_match.group(1))
@@ -69,11 +64,12 @@ def compress_extractive_answer(query, answer):
 
 
 class LocalRAGPipeline:
-    """End-to-end local RAG pipeline with deterministic fallback."""
+    """Answer from local documents and models."""
 
     def __init__(self, window_size=400, overlap=80, theta=0.30,
                  alpha=0.5, beta=0.3, gamma=0.2, top_k=5,
                  generator=None):
+        # Keep retrieval and generation settings together.
         self.window_size = window_size
         self.overlap = overlap
         self.theta = theta
@@ -90,16 +86,13 @@ class LocalRAGPipeline:
         self.audit_entries = []
 
     def load_texts(self, documents):
-        """
-        Load documents from (name, text) tuples.
-
-        Returns:
-            Number of chunks indexed.
-        """
+        """Index a list of (name, text) pairs."""
+        # Prefix chunk IDs with their document ID.
         self.chunks = []
         for doc_index, (name, text) in enumerate(documents):
             doc_id = f"D{doc_index + 1}"
             for chunk in chunk_document(text, self.window_size, self.overlap):
+                # Keep local and globally unique chunk IDs.
                 enriched = dict(chunk)
                 enriched["local_chunk_id"] = chunk["id"]
                 enriched["id"] = f"{doc_id}:{chunk['id']}"
@@ -107,6 +100,7 @@ class LocalRAGPipeline:
                 enriched["source"] = name
                 self.chunks.append(enriched)
 
+        # Empty input clears the previous index.
         if self.chunks:
             self.vectors, self.df, self.N = build_index(self.chunks)
         else:
@@ -114,7 +108,8 @@ class LocalRAGPipeline:
         return len(self.chunks)
 
     def load_files(self, paths):
-        """Load and index several UTF-8 text files."""
+        """Index UTF-8 text files."""
+        # Preserve each path as its source label.
         documents = []
         for path in paths:
             with open(path, "r", encoding="utf-8") as handle:
@@ -122,6 +117,7 @@ class LocalRAGPipeline:
         return self.load_texts(documents)
 
     def _retrieved_context_entries(self, query):
+        # Add short labels for prompt citations.
         retrieved = retrieve(
             query, self.chunks, self.vectors, self.df, self.N, top_k=self.top_k
         )
@@ -138,6 +134,7 @@ class LocalRAGPipeline:
         return entries
 
     def _extractive_answer(self, query):
+        # Use phrase bonuses only in the RAG fallback.
         candidates = rank_answer_candidates(
             query, self.chunks, self.vectors, self.df, self.N,
             alpha=self.alpha, beta=self.beta, gamma=self.gamma,
@@ -147,6 +144,7 @@ class LocalRAGPipeline:
             return "Insufficient evidence.", 0.0, []
 
         best = candidates[0]
+        # Weak evidence should not produce an answer.
         if best["score"] < self.theta:
             return "Insufficient evidence.", best["score"], []
 
@@ -154,10 +152,12 @@ class LocalRAGPipeline:
         return best["sentence"], best["score"], citations
 
     def _extractive_summary(self, context_entries, max_sentences=3):
+        # Take one sentence from each source chunk.
         sentences = []
         citations = []
         for entry in context_entries:
             for sentence in split_sentences(entry["text"]):
+                # Skip repeats from overlapping chunks.
                 if sentence not in sentences:
                     sentences.append(sentence)
                     citations.append(entry["chunk_id"])
@@ -169,13 +169,11 @@ class LocalRAGPipeline:
         return "\n".join(f"- {sentence}" for sentence in sentences), citations
 
     def answer(self, query, mode="answer", prompt_id="rag_cited_answer",
-               use_generator=True, self_correct=False, latency_target_ms=1500,
-               max_context_tokens=900, max_new_tokens=160, model=None):
-        """
-        Answer a query or produce a short summary.
-
-        Returns a dict suitable for UI display and JSON audit logging.
-        """
+               use_generator=True, self_correct=False,
+               latency_target_ms=UNLIMITED_BUDGET_MS,
+               max_context_tokens=900, max_new_tokens=80, model=None):
+        """Answer a question or summarize the loaded text."""
+        # Fail clearly when there is nothing to search.
         if not self.chunks:
             raise RuntimeError("No documents loaded.")
 
@@ -186,6 +184,7 @@ class LocalRAGPipeline:
         if mode == "summary" and not query:
             query = "Summarize the document."
 
+        # Retrieval time counts towards the request budget.
         t0 = time.perf_counter()
         context_entries = self._retrieved_context_entries(query)
         context, used_entries, context_tokens = format_context_entries(
@@ -193,6 +192,7 @@ class LocalRAGPipeline:
         )
         retrieval_latency_ms = (time.perf_counter() - t0) * 1000
 
+        # Prepare a fallback before calling the model.
         if mode == "summary":
             fallback_answer, fallback_citations = self._extractive_summary(used_entries)
             fallback_confidence = 1.0 if fallback_citations else 0.0
@@ -204,6 +204,7 @@ class LocalRAGPipeline:
             fallback_answer = compress_extractive_answer(query, fallback_answer)
 
         graph_text = ""
+        # Build graph hints only when requested.
         if prompt_id == "graph_answer":
             graph = build_document_graph(used_entries)
             graph_text = format_graph(graph)
@@ -219,12 +220,14 @@ class LocalRAGPipeline:
         answer = fallback_answer
         generator_result = None
 
+        # Give generation only the time left after retrieval.
         remaining_s = max((latency_target_ms - retrieval_latency_ms) / 1000, 0.0)
         if not use_generator:
             fallback_reason = "generator_disabled"
         elif remaining_s < 0.2:
             fallback_reason = "latency_target_exceeded_before_generation"
         else:
+            # Fixed sampling keeps runs repeatable.
             generator_result = self.generator.generate(
                 prompt,
                 max_new_tokens=max_new_tokens,
@@ -240,6 +243,7 @@ class LocalRAGPipeline:
                 output_tokens = generator_result.output_tokens
 
                 if self_correct:
+                    # Correction uses the remaining request time.
                     elapsed_ms = (time.perf_counter() - t0) * 1000
                     correction_budget_s = max(
                         (latency_target_ms - elapsed_ms) / 1000, 0.0
@@ -260,6 +264,7 @@ class LocalRAGPipeline:
                             num_ctx=max_context_tokens + max_new_tokens + 256,
                         )
                         generation_latency_ms += correction.latency_ms
+                        # Keep the draft if correction fails.
                         if correction.ok:
                             answer = correction.text
                             output_tokens += correction.output_tokens
@@ -267,6 +272,7 @@ class LocalRAGPipeline:
                 fallback_reason = generator_result.error or "generation_failed"
 
         total_latency_ms = (time.perf_counter() - t0) * 1000
+        # Audit every context chunk sent to the model.
         citation_ids = [entry["chunk_id"] for entry in used_entries]
         selected_model = generator_result.model if generator_result else (model or self.generator.model or "")
 
@@ -282,6 +288,11 @@ class LocalRAGPipeline:
             "retrieval_latency_ms": round(retrieval_latency_ms, 4),
             "generation_latency_ms": round(generation_latency_ms, 4),
             "latency_target_ms": latency_target_ms,
+            "max_context_tokens": max_context_tokens,
+            "top_k": self.top_k,
+            "window_size": self.window_size,
+            "overlap": self.overlap,
+            "self_correct": self_correct,
             "prompt_id": prompt_id,
             "prompt_pack_version": PROMPT_PACK_VERSION,
             "prompt_tokens": prompt_tokens_est,
@@ -292,6 +303,7 @@ class LocalRAGPipeline:
             "deterministic": True,
         }
 
+        # Keep result and audit metadata aligned.
         audit = create_audit_entry(
             query=query,
             answer=answer,

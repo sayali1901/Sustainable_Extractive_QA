@@ -1,10 +1,4 @@
-"""
-Combined extractive QA pipeline.
-
-Usage:
-    python -m src.pipeline --document path/to/doc.txt --query "Your question here"
-    python -m src.pipeline --document path/to/doc.txt --interactive
-"""
+"""Command-line extractive QA pipeline."""
 
 import time
 import argparse
@@ -16,15 +10,11 @@ from .audit import create_audit_entry, write_audit_log
 
 
 class ExtractiveQAPipeline:
-    """
-    End-to-end extractive QA pipeline.
-
-    Combines document chunking (C1), TF-IDF retrieval (C2),
-    extractive answer selection (C3), and audit logging (C4).
-    """
+    """Chunk, search, and answer from one document."""
 
     def __init__(self, window_size=200, overlap=40, theta=0.0,
                  alpha=0.5, beta=0.3, gamma=0.2, top_k=5):
+        # Save scoring and chunking settings.
         self.window_size = window_size
         self.overlap = overlap
         self.theta = theta
@@ -41,6 +31,7 @@ class ExtractiveQAPipeline:
 
     def load_document(self, text):
         """Load and index a document."""
+        # Rebuild the index for the new text.
         self.chunks = chunk_document(text, self.window_size, self.overlap)
         if self.chunks:
             self.vectors, self.df, self.N = build_index(self.chunks)
@@ -48,21 +39,19 @@ class ExtractiveQAPipeline:
 
     def load_file(self, path):
         """Load and index a document from a file path."""
+        # Read text as UTF-8 throughout the project.
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
         return self.load_document(text)
 
     def ask(self, query):
-        """
-        Ask a question about the loaded document.
-
-        Returns:
-            Dict with keys: answer, confidence, latency_ms, refused.
-        """
+        """Answer a question from the loaded document."""
+        # A query needs an index to search.
         if self.chunks is None:
             raise RuntimeError("No document loaded. Call load_document() first.")
 
         t0 = time.perf_counter()
+        # Time only retrieval and answer selection.
         answer, confidence = extractive_qa(
             query, self.chunks, self.vectors, self.df, self.N,
             theta=self.theta, alpha=self.alpha, beta=self.beta,
@@ -70,6 +59,7 @@ class ExtractiveQAPipeline:
         )
         latency_ms = (time.perf_counter() - t0) * 1000
 
+        # Keep an in-memory audit until explicitly saved.
         entry = create_audit_entry(query, answer, confidence, latency_ms)
         self.audit_entries.append(entry)
 
@@ -82,10 +72,12 @@ class ExtractiveQAPipeline:
 
     def save_audit_log(self, path="audit_log.jsonl"):
         """Write all audit entries to file."""
+        # Write after the session to reduce file access.
         write_audit_log(self.audit_entries, path)
 
 
 def main():
+    # Keep command-line setup in one place.
     parser = argparse.ArgumentParser(
         description="Extractive QA Pipeline — zero-dependency document assistant"
     )
@@ -119,6 +111,7 @@ def main():
             print(f"Latency: {result['latency_ms']:.3f} ms")
 
     elif args.interactive:
+        # Reuse the same index for every question.
         print("Interactive mode. Type 'quit' to exit.\n")
         while True:
             query = input("Query: ").strip()

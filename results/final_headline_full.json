@@ -1,0 +1,24 @@
+{
+  "items": 5928,
+  "prompt_id": "rag_cited_answer",
+  "model": "qwen3:1.7b",
+  "use_generator": true,
+  "latency_target_ms": 5000,
+  "max_context_tokens": 4000,
+  "top_k": 3,
+  "window_size": 100,
+  "overlap": 20,
+  "self_correct": false,
+  "answer_containment": 0.8105600539811066,
+  "mean_latency_ms": 3361.022250151822,
+  "p95_latency_ms": 5020.7517,
+  "mean_context_tokens": 179.29790823211877,
+  "mean_retrieved_chunks": 2.0991902834008096,
+  "closed_baseline": {
+    "closed_baseline_items": 5928,
+    "closed_exact_match": 0.4509109311740891,
+    "closed_answer_containment": 0.9610323886639676,
+    "closed_token_f1": 0.7275728565165206,
+    "note": "Closed baseline predictions are evaluated as supplied; no prompt or model optimization is performed."
+  }
+}

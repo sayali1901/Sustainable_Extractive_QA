@@ -1,44 +1,26 @@
-"""
-C4: Audit and Determinism
-
-Structured JSON audit logging for every pipeline run. Records run ID,
-timestamp, query, latency, confidence, citation count, and determinism flag.
-Fixed seed (s=42) ensures bitwise reproducibility.
-"""
+"""JSON audit logging."""
 
 import json
 import hashlib
 import time
 import random
 
-# Fixed seed for deterministic behaviour
+# Keep runs repeatable.
 SEED = 42
 random.seed(SEED)
 
 
 def generate_run_id(query, timestamp):
-    """Generate deterministic run ID from query and timestamp."""
+    """Build a repeatable run ID."""
+    # Use the same inputs for every run ID.
     content = f"{query}:{timestamp}:{SEED}"
     return hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
 
 
 def create_audit_entry(query, answer, confidence, latency_ms,
                        chunk_ids=None, deterministic=True, metadata=None):
-    """
-    Create a structured audit log entry.
-
-    Args:
-        query: The input query string.
-        answer: The extracted answer (or None if refused).
-        confidence: The confidence score.
-        latency_ms: Query latency in milliseconds.
-        chunk_ids: List of chunk IDs that contributed to the answer.
-        deterministic: Whether the run was deterministic.
-        metadata: Optional extra run metadata.
-
-    Returns:
-        Dict representing the audit entry.
-    """
+    """Build one audit entry."""
+    # Store both machine and readable timestamps.
     timestamp = time.time()
     entry = {
         "run_id": generate_run_id(query, timestamp),
@@ -56,12 +38,14 @@ def create_audit_entry(query, answer, confidence, latency_ms,
         "pipeline_version": "1.0.0",
     }
     if metadata:
+        # Runtime-specific fields extend the base record.
         entry.update(metadata)
     return entry
 
 
 def write_audit_log(entries, path="audit_log.jsonl"):
-    """Write audit entries to a JSONL file."""
+    """Append entries to a JSONL file."""
+    # Keep one JSON object per line.
     with open(path, "a", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry) + "\n")
